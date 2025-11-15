@@ -1,5 +1,5 @@
 -- ==================== AUTO PARTY MODULE ====================
--- Load từ: https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/autoparty.luas
+-- Load từ: https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/autoparty.lua
 -- Yêu cầu: WindUI, các biến global từ file chính
 -- ===========================================================
 
@@ -1054,17 +1054,6 @@ task.spawn(function()
                         
                         local targetJobId = getMarketplaceJobId()
                         local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
-                        
-                        if targetJobId then
-                            -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
-                            if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
-                                warn("✅ Đã ở đúng server Marketplace, không cần rejoin")
-                            else
-                                warn("🛒 Rejoin về Marketplace - JobId:", targetJobId:sub(1,20))
-                            else
-                                warn("❌ [STEP 3] MEMBER không có World 1 JobId trong cache")
-                            end
-                        end
                         
                         if targetJobId then
                             -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
