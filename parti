@@ -109,6 +109,39 @@ function SharedJobIdSystem:GetRequestFunction()
            request
 end
 
+-- ✅ HÀM LẤY JOBID TỪ API
+function SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
+    local requestFunc = self:GetRequestFunction()
+    
+    if not requestFunc then
+        warn("❌ Executor không hỗ trợ HTTP request")
+        return nil
+    end
+    
+    local success, result = pcall(function()
+        local response = requestFunc({
+            Url = "https://web-production-d07d6.up.railway.app/api/jobid",
+            Method = "GET"
+        })
+        
+        if response and response.StatusCode == 200 and response.Body then
+            local jobId = response.Body:match("^%s*(.-)%s*$") -- Trim whitespace
+            warn("✅ [API] Nhận được JobId:", jobId:sub(1, 20))
+            return jobId
+        else
+            warn("❌ [API] Response không hợp lệ")
+            return nil
+        end
+    end)
+    
+    if success and result then
+        return result
+    else
+        warn("❌ [API] Lỗi khi gọi API:", result)
+        return nil
+    end
+end
+
 function SharedJobIdSystem:ScanPlaceJobIds(placeId, maxServers)
     maxServers = maxServers or 100
     local requestFunc = self:GetRequestFunction()
@@ -399,9 +432,9 @@ local function isLeader()
     return PartyGlobals.PartySetup.Leader == c.Name 
 end
 
--- ✅ KIỂM TRA CÓ ĐANG Ở WORLD 1 KHÔNG
-local function isInWorld1()
-    return game.PlaceId == 4310463616
+-- ✅ KIỂM TRA CÓ ĐANG Ở MARKETPLACE KHÔNG
+local function isInMarketplace()
+    return game.PlaceId == 7499964980
 end
 
 -- ✅ KIỂM TRA CÓ ĐANG TRONG DUNGEON KHÔNG
@@ -609,87 +642,17 @@ local function getMissingMembers()
     return missing
 end
 
--- ✅ LƯU JOBID CHUNG CHO CẢ TEAM
-local function saveSharedRejoinJobId(placeId, jobId)
-    if not writefile then 
-        warn("❌ [SAVE] Không có writefile!")
-        return false
-    end
-    
-    local success = pcall(function()
-        local data = {
-            PlaceId = placeId,
-            JobId = jobId,
-            Timestamp = tick()
-        }
-        local jsonData = e:JSONEncode(data)
-        writefile(PartyGlobals.SharedRejoinFile, jsonData)
-        warn("💾 [SAVE] Đang ghi file:", PartyGlobals.SharedRejoinFile)
-        
-        -- Đợi và kiểm tra file đã được tạo
-        task.wait(0.5)
-        
-        if isfile and isfile(PartyGlobals.SharedRejoinFile) then
-            local content = readfile(PartyGlobals.SharedRejoinFile)
-            if content == jsonData then
-                PartyGlobals.SharedRejoinPlaceId = placeId
-                PartyGlobals.SharedRejoinJobId = jobId
-                warn("✅ [SAVE] File đã ghi thành công!")
-                warn("💾 [SAVE] PlaceId:", placeId, "JobId:", jobId:sub(1,20))
-                return true
-            else
-                warn("⚠️ [SAVE] Nội dung file không khớp!")
-                return false
-            end
-        else
-            warn("❌ [SAVE] File không tồn tại sau khi ghi!")
-            return false
-        end
-    end)
-    
-    if not success then
-        warn("❌ [SAVE] Lỗi khi ghi file!")
-    end
-    
-    return success
-end
-
--- ✅ TẢI JOBID CHUNG
-local function loadSharedRejoinJobId()
-    if not (readfile and isfile and isfile(PartyGlobals.SharedRejoinFile)) then 
-        return nil 
-    end
-    
-    local success, result = pcall(function()
-        local content = readfile(PartyGlobals.SharedRejoinFile)
-        local data = e:JSONDecode(content)
-        
-        local timeDiff = tick() - (data.Timestamp or 0)
-        if timeDiff > 1800 then -- 30 phút
-            return nil
-        end
-        
-        PartyGlobals.SharedRejoinPlaceId = data.PlaceId
-        PartyGlobals.SharedRejoinJobId = data.JobId
-        
-        warn("✅ [LOAD] PlaceId:", data.PlaceId, "JobId:", data.JobId:sub(1,20))
-        
-        return data
-    end)
-    
-    return success and result or nil
-end
-
--- ✅ HÀM RELOAD JOBID (ĐỂ ĐỒNG BỘ VỚI INSTANCES KHÁC)
-local function reloadSharedRejoinJobId()
-    warn("🔄 [RELOAD] Đang đồng bộ JobId từ file...")
-    local loaded = loadSharedRejoinJobId()
-    if loaded then
-        warn("✅ [RELOAD] Đã đồng bộ JobId:", loaded.JobId:sub(1,20))
-        return true
+-- ✅ LẤY JOBID TỪ API (KHÔNG CẦN LƯU FILE)
+local function getMarketplaceJobId()
+    local jobId = SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
+    if jobId then
+        PartyGlobals.SharedRejoinPlaceId = 7499964980
+        PartyGlobals.SharedRejoinJobId = jobId
+        warn("✅ [API] PlaceId: 7499964980, JobId:", jobId:sub(1,20))
+        return jobId
     else
-        warn("❌ [RELOAD] Không có JobId để đồng bộ")
-        return false
+        warn("❌ [API] Không lấy được JobId")
+        return nil
     end
 end
 
@@ -737,49 +700,6 @@ local function loadDungeonJobId()
     return success and result or nil
 end
 
--- ✅ KIỂM TRA JOBID CÓ CÒN HỢP LỆ KHÔNG
-local function isJobIdStillValid(jobId)
-    if not jobId then return false end
-    
-    -- Kiểm tra xem JobId có phải là JobId hiện tại không
-    if game.JobId == jobId then
-        return true
-    end
-    
-    -- Nếu không phải JobId hiện tại, kiểm tra xem server còn tồn tại không
-    local requestFunc = SharedJobIdSystem:GetRequestFunction()
-    if not requestFunc then
-        warn("❌ Không thể kiểm tra JobId - Executor không hỗ trợ HTTP")
-        return true -- Giả định vẫn còn hợp lệ nếu không check được
-    end
-    
-    local isValid = false
-    pcall(function()
-        local url = "https://games.roblox.com/v1/games/4310463616/servers/Public?limit=100"
-        local response = requestFunc({Url = url, Method = "GET"})
-        
-        if response and response.Body then
-            local data = e:JSONDecode(response.Body)
-            
-            if data and data.data then
-                for _, server in ipairs(data.data) do
-                    if server.id == jobId then
-                        isValid = true
-                        warn("✅ JobId", jobId:sub(1, 20), "còn hợp lệ")
-                        return
-                    end
-                end
-            end
-        end
-    end)
-    
-    if not isValid then
-        warn("❌ JobId", jobId:sub(1, 20), "không còn tồn tại hoặc đã thay đổi")
-    end
-    
-    return isValid
-end
-
 -- ✅ SỬA LẠI PARTY MONITORING - TÍCH HỢP VỚI REJOIN DUNGEON
 local function startPartyMonitoring()
     if PartyGlobals.isMonitoringParty then 
@@ -793,12 +713,6 @@ local function startPartyMonitoring()
     -- ✅ Load party data từ file
     loadPartyData()
     
-    -- ✅ Load JobId cũ nếu có
-    local savedRejoin = loadSharedRejoinJobId()
-    if savedRejoin then
-        warn("📂 Đã load Shared Rejoin JobId:", savedRejoin.JobId)
-    end
-    
     -- ✅ NẾU ĐANG TRONG DUNGEON → LƯU JOBID + DUNGEONID + DIFFICULTY
     if aC then
         warn("🔍 Đang trong dungeon - Lưu thông tin đầy đủ...")
@@ -810,85 +724,29 @@ local function startPartyMonitoring()
         ao.PartyTimestamp = tick()
         savePartyData()
         warn("💾 Đã lưu: DungeonId=", ay, "Difficulty=", az)
-        SharedJobIdSystem:ScanAllWorlds()
     end
     
     local rejoinAttempts = 0
     local lastRejoinTime = 0
-    local lastJobIdCheckTime = 0
     
 task.spawn(function()
         while Toggles.AutoPartyMonitor and Toggles.AutoPartyMonitor.Value do
             -- ✅ BƯỚC 1: CHỈ KIỂM TRA TELEPORT KHI Ở CÁC WORLD HỢP LỆ (KHÔNG PHẢI DUNGEON)
-            if isInValidWorld() and not isInWorld1() then
-                warn("⚠️ Đang ở World/PvP/Marketplace khác (PlaceId:", game.PlaceId, ") → Chuẩn bị teleport về World 1")
+            if isInValidWorld() and not isInMarketplace() then
+                warn("⚠️ Đang ở World/PvP khác (PlaceId:", game.PlaceId, ") → Chuẩn bị teleport về Marketplace")
                 
-                local targetPlaceId = 4310463616
-                local targetJobId
-                
-                -- Reload JobId để đồng bộ
-                reloadSharedRejoinJobId()
-                task.wait(0.5)
-                
-                if PartyGlobals.SharedRejoinJobId then
-                    -- ✅ KIỂM TRA JOBID CÓ CÒN HỢP LỆ KHÔNG
-                    if isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                        targetJobId = PartyGlobals.SharedRejoinJobId
-                        warn("✅ Sử dụng Shared JobId:", targetJobId)
-                    else
-                        warn("⚠️ Shared JobId không còn hợp lệ, cần tạo mới")
-                        PartyGlobals.SharedRejoinJobId = nil
-                        PartyGlobals.SharedRejoinPlaceId = nil
-                    end
-                end
-                
-                if not targetJobId then
-                    if isLeader() then
-                        warn("👑 LEADER tạo World 1 JobId...")
-                        local world1Server = SharedJobIdSystem:GetWorld1JobId()
-                        if world1Server then
-                            targetJobId = world1Server.JobId
-                            saveSharedRejoinJobId(targetPlaceId, targetJobId)
-                            warn("✅ LEADER đã tạo JobId:", targetJobId)
-                            task.wait(3)
-                        else
-                            warn("❌ Không có World 1 JobId - Trigger scan")
-                            SharedJobIdSystem:ScanAllWorlds()
-                            task.wait(10)
-                        end
-                    else
-                        warn("👤 MEMBER đợi LEADER tạo JobId...")
-                        for retry = 1, 60 do
-                            task.wait(8)
-                            if reloadSharedRejoinJobId() then
-                                -- ✅ KIỂM TRA JOBID VỪA NHẬN CÓ HỢP LỆ KHÔNG
-                                if PartyGlobals.SharedRejoinJobId and isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                                    targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 4310463616
-                                    targetJobId = PartyGlobals.SharedRejoinJobId
-                                    warn("✅ MEMBER đã nhận JobId hợp lệ từ LEADER:", targetJobId)
-                                    warn("✅ PlaceId:", targetPlaceId)
-                                    break
-                                else
-                                    warn("⚠️ MEMBER nhận được JobId nhưng không còn hợp lệ (Thử lần", retry, "/60)")
-                                    PartyGlobals.SharedRejoinJobId = nil
-                                    PartyGlobals.SharedRejoinPlaceId = nil
-                                end
-                            else
-                                warn("⚠️ MEMBER chưa nhận được JobId (Thử lần", retry, "/60)")
-                            end
-                        end
-                    end
-                end
+                local targetPlaceId = 7499964980
+                local targetJobId = getMarketplaceJobId()
                 
                 if targetJobId then
                     -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
                     if game.JobId == targetJobId then
-                        warn("✅ Đã ở đúng JobId World 1, bỏ qua teleport")
+                        warn("✅ Đã ở đúng JobId Marketplace, bỏ qua teleport")
                     else
-                        warn("🌍 Teleport về World 1 JobId:", targetJobId)
+                        warn("🛒 Teleport về Marketplace JobId:", targetJobId:sub(1,20))
                         WindUI:Notify({
                             Title = "Auto Party",
-                            Content = "🌍 Đang về World 1...",
+                            Content = "🛒 Đang về Marketplace...",
                             Duration = 5
                         })
                         task.wait(2)
@@ -896,37 +754,11 @@ task.spawn(function()
                         return
                     end
                 else
-                    warn("❌ Không có JobId để teleport, đợi cycle tiếp theo")
+                    warn("❌ Không lấy được JobId từ API, đợi cycle tiếp theo")
                 end
             end
             
-            -- ✅ KIỂM TRA JOBID CŨ MỖI 60 GIÂY (CHỈ KHI Ở WORLD 1)
-            local currentTime = tick()
-            if currentTime - lastJobIdCheckTime >= 60 then
-                lastJobIdCheckTime = currentTime
-                
-                if PartyGlobals.SharedRejoinJobId then
-                    warn("🔍 Kiểm tra JobId cũ có còn hợp lệ...")
-                    
-                    if not isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                        warn("⚠️ JobId cũ đã thay đổi/không còn tồn tại → Tạo JobId mới")
-                        
-                        -- Xóa JobId cũ
-                        PartyGlobals.SharedRejoinJobId = nil
-                        PartyGlobals.SharedRejoinPlaceId = nil
-                        
-                        -- Tạo JobId mới
-                        local world1Server = SharedJobIdSystem:GetWorld1JobId()
-                        if world1Server then
-                            saveSharedRejoinJobId(world1Server.PlaceId, world1Server.JobId)
-                            warn("🆕 Đã tạo Shared JobId mới:", world1Server.JobId)
-                        else
-                            warn("❌ Không thể tạo JobId mới - Trigger scan")
-                            SharedJobIdSystem:ScanAllWorlds()
-                        end
-                    end
-                end
-            end
+            -- ✅ KHÔNG CẦN KIỂM TRA JOBID CŨ - API LUÔN TRẢ VỀ JOBID MỚI NHẤT
             
             -- ✅ ĐẾM CHÍNH XÁC - DÙNG ONLINE COUNT THAY VÌ PARTY COUNT
             local expectedTotal = getExpectedPartySize()
@@ -937,8 +769,8 @@ task.spawn(function()
             warn("📊 Party Status: ", currentCount, "/", expectedTotal, "(Online:", onlineCount, "/", expectedTotal, ")")
             
             -- ✅ KIỂM TRA RESTART DUNGEON TRƯỚC KHI LÀM GÌ KHÁC
-            if currentCount >= expectedTotal and allOnline and isInWorld1() then
-                warn("✅ Party đủ người + Tất cả online + Đang ở World 1")
+            if currentCount >= expectedTotal and allOnline and isInMarketplace() then
+                warn("✅ Party đủ người + Tất cả online + Đang ở Marketplace")
                 
                 -- Reload party data để đồng bộ
                 loadPartyData()
@@ -1034,66 +866,19 @@ task.spawn(function()
                 
                 task.wait(2)
                 
-                -- ✅ REJOIN VỀ WORLD 1
-                local targetPlaceId, targetJobId
+                -- ✅ REJOIN VỀ MARKETPLACE
+                local targetPlaceId = 7499964980
+                local targetJobId = getMarketplaceJobId()
                 
-                warn("📂 Đang đồng bộ JobId với instances khác...")
-                reloadSharedRejoinJobId()
-                task.wait(0.5)
-                
-                if PartyGlobals.SharedRejoinJobId and PartyGlobals.SharedRejoinPlaceId then
-                    if isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                        targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                        targetJobId = PartyGlobals.SharedRejoinJobId
-                        warn("✅ Sử dụng Shared JobId:", targetJobId:sub(1,20))
-                    else
-                        warn("⚠️ JobId không hợp lệ, cần tạo mới")
-                        PartyGlobals.SharedRejoinJobId = nil
-                        PartyGlobals.SharedRejoinPlaceId = nil
-                    end
-                end
-                
-                if not targetJobId then
-                    if isLeader() then
-                        warn("👑 LEADER tạo JobId mới...")
-                        local world1Server = SharedJobIdSystem:GetWorld1JobId()
-                        
-                        if world1Server then
-                            targetPlaceId = world1Server.PlaceId
-                            targetJobId = world1Server.JobId
-                            saveSharedRejoinJobId(targetPlaceId, targetJobId)
-                            warn("✅ LEADER đã tạo JobId:", targetJobId:sub(1,20))
-                            task.wait(3)
-                        else
-                            warn("❌ Không có World 1 JobId - Trigger scan")
-                            SharedJobIdSystem:ScanAllWorlds()
-                            task.wait(10)
-                        end
-                    else
-                        warn("👤 MEMBER đợi LEADER tạo JobId...")
-                        for retry = 1, 10 do
-                            task.wait(5)
-                            if reloadSharedRejoinJobId() then
-                                if PartyGlobals.SharedRejoinJobId and isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                                    targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                    targetJobId = PartyGlobals.SharedRejoinJobId
-                                    warn("✅ MEMBER đã nhận JobId từ LEADER:", targetJobId:sub(1,20))
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                if targetPlaceId and targetJobId then
+                if targetJobId then
                     if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
-                        warn("✅ Đã ở đúng server, không cần rejoin")
+                        warn("✅ Đã ở đúng server Marketplace, không cần rejoin")
                     else
-                        warn("🎲 Rejoin về World 1 - JobId:", targetJobId:sub(1,20))
+                        warn("🛒 Rejoin về Marketplace - JobId:", targetJobId:sub(1,20))
                         
                         WindUI:Notify({
                             Title = "Member Offline",
-                            Content = "🔄 Có người disconnect! Đang rejoin...",
+                            Content = "🔄 Có người disconnect! Đang rejoin Marketplace...",
                             Duration = 5
                         })
                         
@@ -1102,7 +887,7 @@ task.spawn(function()
                         return
                     end
                 else
-                    warn("❌ Không có JobId để rejoin")
+                    warn("❌ Không lấy được JobId từ API")
                 end
             end
             
@@ -1111,8 +896,8 @@ task.spawn(function()
                 warn("✅ Party đã đủ", expectedTotal, "người và tất cả đều online!")
                 rejoinAttempts = 0
                 
-                -- ✅ NẾU ĐANG Ở WORLD 1 + CÓ DUNGEON ĐÃ LƯU + TẤT CẢ ĐỀU ONLINE → QUAY LẠI DUNGEON
-                if isInWorld1() and allOnline then
+                -- ✅ NẾU ĐANG Ở MARKETPLACE + CÓ DUNGEON ĐÃ LƯU + TẤT CẢ ĐỀU ONLINE → QUAY LẠI DUNGEON
+                if isInMarketplace() and allOnline then
                     local dungeonData = loadDungeonJobId()
                     if dungeonData and dungeonData.JobId then
                         warn("🎯 Party đủ người + Tất cả online + Có dungeon → Quay lại dungeon")
@@ -1151,20 +936,17 @@ task.spawn(function()
                         -- Đợi 3 giây để xác nhận
                         task.wait(3)
                         
-                        -- Reload JobId để đồng bộ với leader
-                        warn("📂 [MEMBER IN DUNGEON] Đang reload JobId để rejoin...")
-                        reloadSharedRejoinJobId()
-                        task.wait(0.5)
+                        -- Lấy JobId từ API
+                        warn("📂 [MEMBER IN DUNGEON] Đang lấy JobId từ API để rejoin...")
+                        local targetPlaceId = 7499964980
+                        local targetJobId = getMarketplaceJobId()
                         
-                        if PartyGlobals.SharedRejoinJobId then
-                            local targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                            local targetJobId = PartyGlobals.SharedRejoinJobId
-                            
-                            warn("✅ [MEMBER IN DUNGEON] Đã có JobId để rejoin:", targetJobId:sub(1,20))
+                        if targetJobId then
+                            warn("✅ [MEMBER IN DUNGEON] Đã có JobId từ API:", targetJobId:sub(1,20))
                             
                             WindUI:Notify({
                                 Title = "Missing Party Member",
-                                Content = "🔄 Thiếu người! Đang rejoin về World 1...",
+                                Content = "🔄 Thiếu người! Đang rejoin về Marketplace...",
                                 Duration = 5
                             })
                             
@@ -1172,39 +954,38 @@ task.spawn(function()
                             SharedJobIdSystem:TeleportToPlace(targetPlaceId, targetJobId)
                             return
                         else
-                            warn("⚠️ [MEMBER IN DUNGEON] Chưa có SharedRejoinJobId, đợi cycle tiếp theo")
+                            warn("⚠️ [MEMBER IN DUNGEON] Không lấy được JobId từ API, đợi cycle tiếp theo")
                         end
                     else
                         -- ✅ NẾU KHÔNG TRONG DUNGEON → KIỂM TRA JOBID
                         warn("📂 [MEMBER CHECK] Đang kiểm tra JobId (Không trong dungeon)...")
                         warn("📂 [MEMBER CHECK] PlaceId:", game.PlaceId)
-                        reloadSharedRejoinJobId()
-                        task.wait(0.5)
                         
-                        if PartyGlobals.SharedRejoinJobId then
+                        local expectedJobId = getMarketplaceJobId()
+                        
+                        if expectedJobId then
                             local currentJobId = game.JobId
-                            local expectedJobId = PartyGlobals.SharedRejoinJobId
                             
                             warn("🔍 [MEMBER CHECK] Current JobId:", currentJobId:sub(1,20))
                             warn("🔍 [MEMBER CHECK] Expected JobId:", expectedJobId:sub(1,20))
                             
-                            if currentJobId ~= expectedJobId then
-                                warn("❌ [MEMBER CHECK] SAI JOBID! Đang teleport...")
+                            if currentJobId ~= expectedJobId and game.PlaceId ~= 7499964980 then
+                                warn("❌ [MEMBER CHECK] SAI JOBID hoặc sai PlaceId! Đang teleport...")
                                 
                                 WindUI:Notify({
                                     Title = "Wrong Server",
-                                    Content = "🔄 Sai server! Đang rejoin về đúng server...",
+                                    Content = "🔄 Sai server! Đang rejoin về Marketplace...",
                                     Duration = 5
                                 })
                                 
                                 task.wait(2)
-                                SharedJobIdSystem:TeleportToPlace(PartyGlobals.SharedRejoinPlaceId, expectedJobId)
+                                SharedJobIdSystem:TeleportToPlace(7499964980, expectedJobId)
                                 return
                             else
                                 warn("✅ [MEMBER CHECK] Đúng JobId rồi!")
                             end
                         else
-                            warn("⚠️ [MEMBER CHECK] Chưa có SharedRejoinJobId")
+                            warn("⚠️ [MEMBER CHECK] Không lấy được JobId từ API")
                         end
                     end
                 end
@@ -1250,114 +1031,39 @@ task.spawn(function()
                     end
                     
                     if stillOffline > 0 then
-                        warn("🔄 Xác nhận disconnect → Rejoin về World 1 để đón member")
+                        warn("🔄 Xác nhận disconnect → Rejoin về Marketplace để đón member")
                         
-                        local targetPlaceId, targetJobId
+                        local targetPlaceId = 7499964980
+                        local targetJobId = getMarketplaceJobId()
                         
-                        -- ✅ BƯỚC 1: RELOAD JOBID TỪ FILE (ĐỂ ĐỒNG BỘ VỚI INSTANCES KHÁC)
-                        warn("📂 [STEP 1] Đang đồng bộ JobId với instances khác...")
-                        reloadSharedRejoinJobId()
-                        task.wait(0.5) -- Đợi để đảm bảo đồng bộ
-                        
-                        -- ✅ BƯỚC 2: DÙNG JOBID ĐÃ ĐỒNG BỘ
-                        if PartyGlobals.SharedRejoinJobId and PartyGlobals.SharedRejoinPlaceId then
-                            if isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                                targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                targetJobId = PartyGlobals.SharedRejoinJobId
-                                warn("✅ [STEP 2] Sử dụng Shared JobId:", targetJobId:sub(1,20))
-                            else
-                                warn("⚠️ [STEP 2] JobId không hợp lệ, cần tạo mới")
-                                PartyGlobals.SharedRejoinJobId = nil
-                                PartyGlobals.SharedRejoinPlaceId = nil
-                            end
-                        end
-                        
-                        -- ✅ BƯỚC 3: NẾU KHÔNG CÓ JOBID → CHỈ LEADER MỚI TẠO MỚI
-                        if not targetJobId then
-                            if isLeader() then
-                                warn("👑 [STEP 3] LEADER tạo JobId mới...")
-                                local world1Server = SharedJobIdSystem:GetWorld1JobId()
-                                
-                                if world1Server then
-                                    targetPlaceId = world1Server.PlaceId
-                                    targetJobId = world1Server.JobId
-                                    
-                                    warn("💾 [STEP 3] LEADER đang lưu JobId vào file...")
-                                    local saveSuccess = saveSharedRejoinJobId(targetPlaceId, targetJobId)
-                                    
-                                    if saveSuccess then
-                                        warn("✅ [STEP 3] LEADER đã lưu JobId thành công:", targetJobId:sub(1,20))
-                                        warn("⏳ [STEP 3] LEADER đợi 3 giây để Member đọc file...")
-                                        task.wait(3)
-                                    else
-                                        warn("❌ [STEP 3] LEADER không thể lưu file!")
-                                        targetJobId = nil
-                                    end
-                                else
-                                    warn("❌ [STEP 3] Không có World 1 JobId - Trigger scan")
-                                    SharedJobIdSystem:ScanAllWorlds()
-                                end
-                            else
-                                warn("👤 [STEP 3] MEMBER đợi LEADER tạo JobId...")
-                                -- Retry 5 lần, mỗi lần đợi 8 giây
-                                local retryCount = 0
-                                local maxRetries = 5
-                                
-                                while retryCount < maxRetries do
-                                    retryCount = retryCount + 1
-                                    local waitTime = 8
-                                    warn("🔄 [STEP 3] MEMBER thử lần", retryCount, "/", maxRetries, "- Đợi", waitTime, "giây...")
-                                    task.wait(waitTime)
-                                    
-                                    -- Kiểm tra file có tồn tại không
-                                    if isfile and isfile(PartyGlobals.SharedRejoinFile) then
-                                        warn("📂 [STEP 3] File tồn tại, thử đọc...")
-                                    else
-                                        warn("❌ [STEP 3] File chưa tồn tại:", PartyGlobals.SharedRejoinFile)
-                                        if retryCount < maxRetries then
-                                            continue
-                                        end
-                                    end
-                                    
-                                    local reloadSuccess = reloadSharedRejoinJobId()
-                                    
-                                    if reloadSuccess and PartyGlobals.SharedRejoinJobId then
-                                        targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                        targetJobId = PartyGlobals.SharedRejoinJobId
-                                        warn("✅ [STEP 3] MEMBER đã nhận JobId từ LEADER:", targetJobId:sub(1,20))
-                                        warn("✅ [STEP 3] PlaceId:", targetPlaceId)
-                                        break
-                                    else
-                                        warn("⚠️ [STEP 3] MEMBER chưa nhận được JobId (Thử lần", retryCount, "/", maxRetries, ")")
-                                        if retryCount < maxRetries then
-                                            warn("⏳ [STEP 3] Đợi thêm...")
-                                        end
-                                    end
-                                end
-                                
-                                if not targetJobId then
-                                    warn("❌ [STEP 3] MEMBER không nhận được JobId sau", maxRetries, "lần thử")
-                                end
-                            end
-                        end
-                        
-                        if targetPlaceId and targetJobId then
+                        if targetJobId then
                             -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
                             if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
-                                warn("✅ Đã ở đúng server (PlaceId:", targetPlaceId, "JobId:", targetJobId:sub(1,20), "), không cần rejoin")
+                                warn("✅ Đã ở đúng server Marketplace, không cần rejoin")
                             else
-                                warn("🎲 Rejoin về: World 1 - JobId:", targetJobId:sub(1,20))
+                                warn("🛒 Rejoin về Marketplace - JobId:", targetJobId:sub(1,20))
+                            else
+                                warn("❌ [STEP 3] MEMBER không có World 1 JobId trong cache")
+                            end
+                        end
+                        
+                        if targetJobId then
+                            -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
+                            if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
+                                warn("✅ Đã ở đúng server Marketplace, không cần rejoin")
+                            else
+                                warn("🛒 Rejoin về Marketplace - JobId:", targetJobId:sub(1,20))
                                 
                                 if isLeader() then
                                     WindUI:Notify({
                                         Title = "Member Disconnected",
-                                        Content = "🔄 Rejoin về World 1 để đợi member...",
+                                        Content = "🔄 Rejoin về Marketplace để đợi member...",
                                         Duration = 5
                                     })
                                 else
                                     WindUI:Notify({
                                         Title = "Rejoining",
-                                        Content = "🔄 Rejoin về World 1...",
+                                        Content = "🔄 Rejoin về Marketplace...",
                                         Duration = 5
                                     })
                                 end
@@ -1367,39 +1073,14 @@ task.spawn(function()
                                 return
                             end
                         else
-                            warn("❌ [MEMBER] Không có JobId để rejoin - Có thể LEADER chưa tạo hoặc file chưa sync")
-                            
-                            -- ✅ THÊM: NẾU MEMBER KHÔNG NHẬN ĐƯỢC JOBID → THỬ LẠI 1 LẦN NỮA
-                            if not isLeader() then
-                                warn("🔄 [MEMBER] Thử reload JobId 1 lần nữa...")
-                                task.wait(5)
-                                
-                                if reloadSharedRejoinJobId() and PartyGlobals.SharedRejoinJobId then
-                                    targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                    targetJobId = PartyGlobals.SharedRejoinJobId
-                                    
-                                    warn("✅ [MEMBER] Reload thành công! PlaceId:", targetPlaceId, "JobId:", targetJobId:sub(1,20))
-                                    
-                                    WindUI:Notify({
-                                        Title = "Rejoining",
-                                        Content = "🔄 Đã nhận JobId! Đang rejoin...",
-                                        Duration = 5
-                                    })
-                                    
-                                    task.wait(2)
-                                    SharedJobIdSystem:TeleportToPlace(targetPlaceId, targetJobId)
-                                    return
-                                else
-                                    warn("❌ [MEMBER] Reload thất bại - Bỏ qua cycle này")
-                                end
-                            end
+                            warn("❌ Không lấy được JobId từ API")
                         end
                     end
                 end
                 
-                -- ✅ NẾU CÓ NGƯỜI ONLINE NHƯNG CHƯA VÀO PARTY + ĐANG Ở WORLD 1
-                if onlineMissingCount > 0 and isInWorld1() then
-                    warn("👥 Người online và cùng server (World 1) → Mời/Accept")
+                -- ✅ NẾU CÓ NGƯỜI ONLINE NHƯNG CHƯA VÀO PARTY + ĐANG Ở MARKETPLACE
+                if onlineMissingCount > 0 and isInMarketplace() then
+                    warn("👥 Người online và cùng server (Marketplace) → Mời/Accept")
                     
                     -- ✅ MEMBER: Kiểm tra có đang ở party sai không → Rời party
                     if not isLeader() then
@@ -1423,22 +1104,21 @@ task.spawn(function()
                         
                         -- ✅ THÊM: Member kiểm tra có đang ở đúng JobId không
                         warn("📂 [MEMBER] Kiểm tra có đang ở đúng JobId không...")
-                        reloadSharedRejoinJobId()
-                        task.wait(0.5)
+                        local expectedJobId = getMarketplaceJobId()
                         
-                        if PartyGlobals.SharedRejoinJobId and game.JobId ~= PartyGlobals.SharedRejoinJobId then
+                        if expectedJobId and game.JobId ~= expectedJobId then
                             warn("⚠️ [MEMBER] Đang ở sai JobId!")
                             warn("⚠️ [MEMBER] Current JobId:", game.JobId:sub(1,20))
-                            warn("⚠️ [MEMBER] Expected JobId:", PartyGlobals.SharedRejoinJobId:sub(1,20))
+                            warn("⚠️ [MEMBER] Expected JobId:", expectedJobId:sub(1,20))
                             
                             WindUI:Notify({
                                 Title = "Wrong Server",
-                                Content = "🔄 Đang ở sai server! Đang rejoin...",
+                                Content = "🔄 Sai server! Đang rejoin Marketplace...",
                                 Duration = 5
                             })
                             
                             task.wait(2)
-                            SharedJobIdSystem:TeleportToPlace(PartyGlobals.SharedRejoinPlaceId, PartyGlobals.SharedRejoinJobId)
+                            SharedJobIdSystem:TeleportToPlace(7499964980, expectedJobId)
                             return
                         end
                     end
@@ -1464,91 +1144,27 @@ task.spawn(function()
                     rejoinAttempts = 0
                 end
                 
-                -- ✅ NẾU CÓ NGƯỜI ONLINE NHƯNG KHÁC SERVER HOẶC KHÔNG PHẢI WORLD 1
-                if onlineMissingCount > 0 and not isInWorld1() then
+                -- ✅ NẾU CÓ NGƯỜI ONLINE NHƯNG KHÁC SERVER HOẶC KHÔNG PHẢI MARKETPLACE
+                if onlineMissingCount > 0 and not isInMarketplace() then
                     local timeSinceLastRejoin = tick() - lastRejoinTime
                     
                     if timeSinceLastRejoin >= 60 and rejoinAttempts < 5 then
-                        warn("🔄 Người online nhưng khác server hoặc không ở World 1 → Rejoin")
+                        warn("🔄 Người online nhưng khác server hoặc không ở Marketplace → Rejoin")
                         rejoinAttempts = rejoinAttempts + 1
                         lastRejoinTime = tick()
                         
-                        local targetPlaceId, targetJobId
+                        local targetPlaceId = 7499964980
+                        local targetJobId = getMarketplaceJobId()
                         
-                        -- ✅ RELOAD JOBID TRƯỚC KHI REJOIN
-                        warn("📂 Đang đồng bộ JobId với instances khác...")
-                        reloadSharedRejoinJobId()
-                        task.wait(0.5)
-                        
-                        if PartyGlobals.SharedRejoinJobId and PartyGlobals.SharedRejoinPlaceId then
-                            if isJobIdStillValid(PartyGlobals.SharedRejoinJobId) then
-                                targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                targetJobId = PartyGlobals.SharedRejoinJobId
-                                warn("✅ Sử dụng Shared JobId:", targetJobId:sub(1,20))
-                            else
-                                warn("⚠️ JobId không hợp lệ")
-                                PartyGlobals.SharedRejoinJobId = nil
-                                PartyGlobals.SharedRejoinPlaceId = nil
-                            end
-                        end
-                        
-                        if not targetJobId then
-                            if isLeader() then
-                                warn("👑 LEADER tạo JobId mới...")
-                                local world1Server = SharedJobIdSystem:GetWorld1JobId()
-                                
-                                if world1Server then
-                                    targetPlaceId = world1Server.PlaceId
-                                    targetJobId = world1Server.JobId
-                                    saveSharedRejoinJobId(targetPlaceId, targetJobId)
-                                    warn("✅ LEADER đã tạo JobId:", targetJobId:sub(1,20))
-                                    task.wait(2)
-                                else
-                                    warn("❌ Không có World 1 JobId")
-                                    SharedJobIdSystem:ScanAllWorlds()
-                                    task.wait(10)
-                                    break
-                                end
-                            else
-                                warn("👤 MEMBER đợi LEADER tạo JobId...")
-                                -- Retry 2 lần, mỗi lần đợi 10 giây
-                                local retryCount = 0
-                                local maxRetries = 2
-                                
-                                while retryCount < maxRetries do
-                                    retryCount = retryCount + 1
-                                    warn("🔄 MEMBER thử lần", retryCount, "/", maxRetries)
-                                    task.wait(10)
-                                    
-                                    if reloadSharedRejoinJobId() then
-                                        targetPlaceId = PartyGlobals.SharedRejoinPlaceId
-                                        targetJobId = PartyGlobals.SharedRejoinJobId
-                                        warn("✅ MEMBER đã nhận JobId từ LEADER:", targetJobId:sub(1,20))
-                                        break
-                                    else
-                                        warn("⚠️ MEMBER chưa nhận được JobId, retry...")
-                                    end
-                                end
-                                
-                                if not targetJobId then
-                                    warn("❌ MEMBER không nhận được JobId sau", maxRetries, "lần thử")
-                                    task.wait(10)
-                                    break
-                                end
-                            end
-                        end
-                        
-                        if targetPlaceId and targetJobId then
-                            -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
+                        if targetJobId then
                             if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
-                                warn("✅ Đã ở đúng server, không cần rejoin")
-                                rejoinAttempts = 0 -- Reset rejoin attempts
+                                warn("✅ Đã ở đúng server Marketplace, không cần rejoin")
                             else
-                                warn("🎲 Rejoin về: World 1")
+                                warn("🛒 Rejoin về Marketplace - JobId:", targetJobId:sub(1,20))
                                 
                                 WindUI:Notify({
-                                    Title = "Gathering Party",
-                                    Content = "🔄 Rejoin về World 1...",
+                                    Title = "Party Sync",
+                                    Content = "🔄 Đang rejoin về Marketplace...",
                                     Duration = 5
                                 })
                                 
@@ -1556,6 +1172,8 @@ task.spawn(function()
                                 SharedJobIdSystem:TeleportToPlace(targetPlaceId, targetJobId)
                                 return
                             end
+                        else
+                            warn("❌ Không lấy được JobId từ API")
                         end
                     end
                 end
@@ -1628,17 +1246,19 @@ local function createRejoinSystemUI(TabParty)
     })
     
     task.spawn(function()
-        while task.wait(2) do
+        while task.wait(5) do
             pcall(function()
-                local savedRejoin = loadSharedRejoinJobId()
+                local desc = "Đang lấy JobId từ API..."
                 
-                local desc = "No shared JobId"
+                -- Lấy JobId mới nhất từ API
+                local jobId = SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
                 
-                if savedRejoin and savedRejoin.JobId then
-                    local age = math.floor(tick() - savedRejoin.Timestamp)
-                    desc = "Shared JobId:\n  " .. savedRejoin.JobId:sub(1, 25) .. "..."
-                    desc = desc .. "\n  Age: " .. timeElapsed(age)
-                    desc = desc .. "\n  PlaceId: " .. savedRejoin.PlaceId
+                if jobId then
+                    desc = "🛒 Marketplace JobId:\n  " .. jobId:sub(1, 25) .. "..."
+                    desc = desc .. "\n  Source: API"
+                    desc = desc .. "\n  PlaceId: 7499964980"
+                else
+                    desc = "❌ Không lấy được JobId từ API"
                 end
                 
                 jobIdPara:SetDesc(desc)
@@ -1664,21 +1284,23 @@ local function createRejoinSystemUI(TabParty)
     }))
     
     TabParty:Button({
-        Title = "🗑️ Clear Shared JobId",
-        Description = "Xóa JobId chung (sẽ tạo mới lần rejoin sau)",
+        Title = "🔄 Test API JobId",
+        Description = "Lấy JobId mới từ API để test",
         Callback = function()
-            if writefile then
-                pcall(function()
-                    writefile(PartyGlobals.SharedRejoinFile, "")
-                    PartyGlobals.SharedRejoinJobId = nil
-                    PartyGlobals.SharedRejoinPlaceId = nil
-                end)
+            local jobId = SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
+            if jobId then
+                WindUI:Notify({
+                    Title = "API JobId",
+                    Content = "✅ JobId: " .. jobId:sub(1, 20) .. "...",
+                    Duration = 5
+                })
+            else
+                WindUI:Notify({
+                    Title = "API Error",
+                    Content = "❌ Không lấy được JobId từ API",
+                    Duration = 3
+                })
             end
-            WindUI:Notify({
-                Title = "JobId",
-                Content = "🗑️ Đã xóa Shared JobId",
-                Duration = 2
-            })
         end
     })
 end
