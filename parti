@@ -1,5 +1,5 @@
 -- ==================== AUTO PARTY MODULE ====================
--- Load từ: https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/autoparty.lua
+-- Load từ: https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/autoparty.luas
 -- Yêu cầu: WindUI, các biến global từ file chính
 -- ===========================================================
 
@@ -126,18 +126,23 @@ function SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
         
         if response and response.StatusCode == 200 and response.Body then
             local jobId = response.Body:match("^%s*(.-)%s*$") -- Trim whitespace
-            warn("✅ [API] Nhận được JobId:", jobId:sub(1, 20))
-            return jobId
+            if jobId and jobId ~= "" and #jobId > 10 then
+                warn("✅ [API] Nhận được JobId:", jobId:sub(1, 20))
+                return jobId
+            else
+                warn("❌ [API] JobId không hợp lệ:", tostring(jobId))
+                return nil
+            end
         else
-            warn("❌ [API] Response không hợp lệ")
+            warn("❌ [API] Response không hợp lệ - StatusCode:", response and response.StatusCode or "nil")
             return nil
         end
     end)
     
-    if success and result then
+    if success and result and result ~= "" then
         return result
     else
-        warn("❌ [API] Lỗi khi gọi API:", result)
+        warn("❌ [API] Lỗi khi gọi API:", tostring(result))
         return nil
     end
 end
@@ -432,9 +437,9 @@ local function isLeader()
     return PartyGlobals.PartySetup.Leader == c.Name 
 end
 
--- ✅ KIỂM TRA CÓ ĐANG Ở MARKETPLACE KHÔNG
+-- ✅ KIỂM TRA CÓ ĐANG Ở MARKETPLACE HOẶC WORLD 1 KHÔNG (DO CÓ FALLBACK)
 local function isInMarketplace()
-    return game.PlaceId == 7499964980
+    return game.PlaceId == 7499964980 or game.PlaceId == 4310463616
 end
 
 -- ✅ KIỂM TRA CÓ ĐANG TRONG DUNGEON KHÔNG
@@ -642,17 +647,30 @@ local function getMissingMembers()
     return missing
 end
 
--- ✅ LẤY JOBID TỪ API (KHÔNG CẦN LƯU FILE)
+-- ✅ LẤY JOBID TỪ API (CÓ FALLBACK VỀ WORLD 1 NẾU API FAIL)
 local function getMarketplaceJobId()
+    -- Thử lấy từ API trước
     local jobId = SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
-    if jobId then
+    if jobId and jobId ~= "" then
         PartyGlobals.SharedRejoinPlaceId = 7499964980
         PartyGlobals.SharedRejoinJobId = jobId
         warn("✅ [API] PlaceId: 7499964980, JobId:", jobId:sub(1,20))
         return jobId
     else
-        warn("❌ [API] Không lấy được JobId")
-        return nil
+        warn("⚠️ [API] Không lấy được JobId từ API, fallback về World 1")
+        
+        -- Fallback: Dùng World 1 như code cũ
+        local world1Server = SharedJobIdSystem:GetWorld1JobId()
+        if world1Server and world1Server.JobId then
+            PartyGlobals.SharedRejoinPlaceId = 4310463616
+            PartyGlobals.SharedRejoinJobId = world1Server.JobId
+            warn("✅ [FALLBACK] PlaceId: 4310463616, JobId:", world1Server.JobId:sub(1,20))
+            return world1Server.JobId
+        else
+            warn("❌ [FALLBACK] Không có JobId - Cần scan World 1")
+            SharedJobIdSystem:ScanAllWorlds()
+            return nil
+        end
     end
 end
 
@@ -733,20 +751,21 @@ task.spawn(function()
         while Toggles.AutoPartyMonitor and Toggles.AutoPartyMonitor.Value do
             -- ✅ BƯỚC 1: CHỈ KIỂM TRA TELEPORT KHI Ở CÁC WORLD HỢP LỆ (KHÔNG PHẢI DUNGEON)
             if isInValidWorld() and not isInMarketplace() then
-                warn("⚠️ Đang ở World/PvP khác (PlaceId:", game.PlaceId, ") → Chuẩn bị teleport về Marketplace")
+                warn("⚠️ Đang ở World/PvP khác (PlaceId:", game.PlaceId, ") → Chuẩn bị teleport về Marketplace/World 1")
                 
-                local targetPlaceId = 7499964980
                 local targetJobId = getMarketplaceJobId()
+                local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
                 
                 if targetJobId then
                     -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
-                    if game.JobId == targetJobId then
-                        warn("✅ Đã ở đúng JobId Marketplace, bỏ qua teleport")
+                    if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
+                        warn("✅ Đã ở đúng JobId, bỏ qua teleport")
                     else
-                        warn("🛒 Teleport về Marketplace JobId:", targetJobId:sub(1,20))
+                        local placeName = targetPlaceId == 7499964980 and "Marketplace" or "World 1"
+                        warn("🌍 Teleport về", placeName, "JobId:", targetJobId:sub(1,20))
                         WindUI:Notify({
                             Title = "Auto Party",
-                            Content = "🛒 Đang về Marketplace...",
+                            Content = "🌍 Đang về " .. placeName .. "...",
                             Duration = 5
                         })
                         task.wait(2)
@@ -754,7 +773,7 @@ task.spawn(function()
                         return
                     end
                 else
-                    warn("❌ Không lấy được JobId từ API, đợi cycle tiếp theo")
+                    warn("❌ Không lấy được JobId, đợi cycle tiếp theo")
                 end
             end
             
@@ -866,9 +885,9 @@ task.spawn(function()
                 
                 task.wait(2)
                 
-                -- ✅ REJOIN VỀ MARKETPLACE
-                local targetPlaceId = 7499964980
+                -- ✅ REJOIN VỀ MARKETPLACE/WORLD 1
                 local targetJobId = getMarketplaceJobId()
+                local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
                 
                 if targetJobId then
                     if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
@@ -937,9 +956,9 @@ task.spawn(function()
                         task.wait(3)
                         
                         -- Lấy JobId từ API
-                        warn("📂 [MEMBER IN DUNGEON] Đang lấy JobId từ API để rejoin...")
-                        local targetPlaceId = 7499964980
+                        warn("📂 [MEMBER IN DUNGEON] Đang lấy JobId để rejoin...")
                         local targetJobId = getMarketplaceJobId()
+                        local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
                         
                         if targetJobId then
                             warn("✅ [MEMBER IN DUNGEON] Đã có JobId từ API:", targetJobId:sub(1,20))
@@ -1031,10 +1050,10 @@ task.spawn(function()
                     end
                     
                     if stillOffline > 0 then
-                        warn("🔄 Xác nhận disconnect → Rejoin về Marketplace để đón member")
+                        warn("🔄 Xác nhận disconnect → Rejoin để đón member")
                         
-                        local targetPlaceId = 7499964980
                         local targetJobId = getMarketplaceJobId()
+                        local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
                         
                         if targetJobId then
                             -- ✅ KIỂM TRA ĐÃ Ở ĐÚNG JOBID CHƯA
@@ -1153,8 +1172,8 @@ task.spawn(function()
                         rejoinAttempts = rejoinAttempts + 1
                         lastRejoinTime = tick()
                         
-                        local targetPlaceId = 7499964980
                         local targetJobId = getMarketplaceJobId()
+                        local targetPlaceId = PartyGlobals.SharedRejoinPlaceId or 7499964980
                         
                         if targetJobId then
                             if game.JobId == targetJobId and game.PlaceId == targetPlaceId then
@@ -1248,17 +1267,25 @@ local function createRejoinSystemUI(TabParty)
     task.spawn(function()
         while task.wait(5) do
             pcall(function()
-                local desc = "Đang lấy JobId từ API..."
+                local desc = "Đang lấy JobId..."
                 
-                -- Lấy JobId mới nhất từ API
+                -- Lấy JobId mới nhất từ API (có fallback World 1)
                 local jobId = SharedJobIdSystem:GetMarketplaceJobIdFromAPI()
                 
-                if jobId then
+                if jobId and jobId ~= "" then
                     desc = "🛒 Marketplace JobId:\n  " .. jobId:sub(1, 25) .. "..."
                     desc = desc .. "\n  Source: API"
                     desc = desc .. "\n  PlaceId: 7499964980"
                 else
-                    desc = "❌ Không lấy được JobId từ API"
+                    -- Fallback: Hiển thị World 1
+                    local world1Server = SharedJobIdSystem:GetWorld1JobId()
+                    if world1Server and world1Server.JobId then
+                        desc = "🌍 World 1 JobId (Fallback):\n  " .. world1Server.JobId:sub(1, 25) .. "..."
+                        desc = desc .. "\n  Source: Cache"
+                        desc = desc .. "\n  PlaceId: 4310463616"
+                    else
+                        desc = "⚠️ API fail + Chưa scan World 1\n  Hãy đợi auto scan..."
+                    end
                 end
                 
                 jobIdPara:SetDesc(desc)
@@ -1547,7 +1574,7 @@ local function createAutoPartyTab()
     
     ConfigSystem.registerUIElement("AutoPartyMonitor", TabParty:Toggle({ 
         Title = "Auto Monitor Party", 
-        Description = "CẢ LEADER VÀ MEMBER rejoin về cùng World 1 JobId (giữ nguyên JobId cũ)", 
+        Description = "Tự động rejoin Marketplace (API) hoặc World 1 (fallback) + auto reform party", 
         Default = ToggleStates.AutoPartyMonitor or false,
         Callback = function(s) 
             if Toggles.AutoPartyMonitor then
